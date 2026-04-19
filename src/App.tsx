@@ -18,18 +18,9 @@ export default function App() {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   const handleSendMessage = useCallback(
-    (content: string) => {
+    (content: string, role: 'user' | 'assistant') => {
       if (!activeConversationId) return;
-      // Determine if this looks like an AI response
-      const isLongResponse = content.length > 100;
-      const hasCodeBlocks = content.includes('```');
-      const isAI = isLongResponse || hasCodeBlocks;
-
-      addMessage(
-        activeConversationId,
-        content,
-        isAI ? 'assistant' : 'user'
-      );
+      addMessage(activeConversationId, content, role);
     },
     [activeConversationId, addMessage]
   );
@@ -43,7 +34,7 @@ export default function App() {
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
-        onCreateConversation={createConversation}
+        onCreateConversation={() => createConversation()}
         onSwitchConversation={switchConversation}
         onDestroyConversation={destroyConversation}
         onOpenHelp={() => setIsHelpOpen(true)}

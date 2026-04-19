@@ -56,6 +56,7 @@ const initialConversations: Conversation[] = [
   },
 ];
 
+// TODO: Persist conversations to localStorage or backend API
 export function useConversations() {
   const [conversations, setConversations] = useState<Conversation[]>(initialConversations);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(initialConversations[0]?.id ?? null);
@@ -70,6 +71,7 @@ export function useConversations() {
     activeListeners.current.forEach(cb => cb(id));
   }, []);
 
+  // TODO: Validate title input and prevent duplicate session names
   const createConversation = useCallback((title?: string) => {
     const newConv: Conversation = {
       id: generateId(),
@@ -88,6 +90,7 @@ export function useConversations() {
     return newConv.id;
   }, [conversations.length, notifyChange, notifyActive]);
 
+  // TODO: Add confirmation dialog and support soft-delete / archiving before removal
   const destroyConversation = useCallback((id: string) => {
     setConversations(prev => {
       const updated = prev.filter(c => c.id !== id);
@@ -136,6 +139,7 @@ export function useConversations() {
 
   const activeConversation = conversations.find(c => c.id === activeConversationId) ?? null;
 
+  // TODO: Remove global window API or secure it before production release
   // Expose API to window
   useEffect(() => {
     const api = {

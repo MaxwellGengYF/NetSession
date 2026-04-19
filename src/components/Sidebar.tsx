@@ -42,6 +42,7 @@ export function Sidebar({
         </span>
       </div>
 
+      {/* TODO: Allow template selection or prompt before creating a new session */}
       {/* New Chat Button */}
       <div className="px-4 mb-4">
         <button
@@ -109,6 +110,7 @@ export function Sidebar({
               >
                 <MoreHorizontal size={14} style={{ color: '#52525B' }} />
               </button>
+              {/* TODO: Close dropdown on outside click and add keyboard navigation */}
               {/* Dropdown menu */}
               {menuOpenId === conv.id && (
                 <div
@@ -119,6 +121,7 @@ export function Sidebar({
                     minWidth: 140,
                   }}
                 >
+                  {/* TODO: Add a confirmation modal before destroying the session */}
                   <button
                     className="flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors duration-150 hover:bg-[#2A2A2A]"
                     style={{ color: '#A1A1AA' }}

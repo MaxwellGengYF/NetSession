@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, Code, Palette, Layout, Sparkles } from 'lucide-react';
 import type { Conversation } from '@/types/conversation';
+import { useRpcSocket } from '@/hooks/useRpcSocket';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
-  onSendMessage: (content: string) => void;
+  onSendMessage: (content: string, role: 'user' | 'assistant') => void;
 }
 
 const quickActions = [
@@ -13,62 +14,66 @@ const quickActions = [
   { icon: Layout, label: 'Generate layout structure', prompt: 'Suggest a responsive grid layout for a dashboard with sidebar navigation.' },
 ];
 
-const aiResponses: Record<string, { content: string; suggestions?: string[] }> = {
-  default: {
-    content: 'I understand. Let me analyze that for you.\n\nBased on your request, I can see several key points to consider:\n\n1. **Structure**: The overall architecture looks solid, but there are areas for optimization.\n2. **Performance**: Consider lazy loading for heavy components to improve initial render time.\n3. **Accessibility**: Ensure all interactive elements have proper focus states and ARIA labels.\n4. **Consistency**: Maintain a unified design language across all modules.\n\nWould you like me to dive deeper into any of these areas?',
-    suggestions: ['Refine layout', 'Add spacing', 'Responsive check'],
-  },
-  'design': {
-    content: 'I\'ve analyzed your design mockup. Here are my findings:\n\n**Visual Hierarchy**\nThe main CTA button stands out well with the purple gradient, but the secondary actions could use more differentiation. Consider using a lighter shade for inactive states.\n\n**Typography**\nThe heading hierarchy is clear. However, the body text line-height could be increased to 1.6 for better readability on dark backgrounds.\n\n**Color System**\nThe dark theme works well. The #6C5CE7 purple accent provides good contrast against #0D0D0D background (ratio: 5.2:1).\n\n**Spacing**\nThe 24px card padding feels comfortable. Consider adding 8px micro-gaps between related elements within cards.\n\nOverall: Strong foundation with minor refinements needed.',
-    suggestions: ['Color audit', 'Spacing system', 'Typography scale'],
-  },
-  'code': {
-    content: 'Here\'s the animation code you requested:\n\n```css\n@keyframes fadeInUp {\n  from {\n    opacity: 0;\n    transform: translateY(20px) scale(0.95);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n\n.animate-fade-in-up {\n  animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;\n}\n```\n\nThis uses a custom cubic-bezier curve for a smooth, professional feel. The 20px vertical offset creates a subtle upward motion, while the 0.95 scale adds a slight "pop" effect.\n\n**Usage:**\n```html\n<div class="animate-fade-in-up">Content</div>\n```',
-    suggestions: ['Easing variants', 'Stagger delays', 'Reduced motion'],
-  },
-  'layout': {
-    content: 'Here\'s a responsive dashboard layout structure:\n\n```\n┌─────────────────────────────────────┐\n│  Sidebar │  Header (64px)           │\n│  (260px) ├──────────────────────────┤\n│          │  KPI Cards (3-col grid)  │\n│          ├──────────────────────────┤\n│          │  Main Chart  │  Breakdown │\n│          │  (2/3 width) │  (1/3)     │\n│          ├──────────────────────────┤\n│          │  Data Table              │\n└─────────────────────────────────────┘\n```\n\n**Grid Config:**\n- Desktop: `grid-template-columns: 260px 1fr`\n- Tablet (<1024px): Collapse sidebar to 64px icons-only\n- Mobile (<768px): Bottom tab bar, single column\n\n**Breakpoints:**\n- `sm`: 640px\n- `md`: 768px  \n- `lg`: 1024px\n- `xl`: 1280px',
-    suggestions: ['Grid code', 'Breakpoint config', 'Dark mode toggle'],
-  },
-};
-
-function getAIResponse(userMessage: string): { content: string; suggestions?: string[] } {
-  const lower = userMessage.toLowerCase();
-  if (lower.includes('design') || lower.includes('analyze') || lower.includes('visual')) {
-    return aiResponses.design;
-  }
-  if (lower.includes('code') || lower.includes('animation') || lower.includes('css')) {
-    return aiResponses.code;
-  }
-  if (lower.includes('layout') || lower.includes('grid') || lower.includes('responsive')) {
-    return aiResponses.layout;
-  }
-  return aiResponses.default;
-}
 
 export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
   const [inputValue, setInputValue] = useState('');
   const [isFocused, setIsFocused] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { readyState, sendRequest } = useRpcSocket('ws://127.0.0.1:8889');
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversation?.messages.length]);
+  }, [conversation?.messages.length, isProcessing]);
 
-  const handleSend = () => {
-    const content = inputValue.trim();
+  const pollForResponse = async () => {
+    let buffer = '';
+    let finished = false;
+
+    while (!finished) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      try {
+        const chunks = (await sendRequest('get_output_from_client', [])) as string[];
+        if (Array.isArray(chunks)) {
+          buffer += chunks.join('');
+        }
+        finished = (await sendRequest('is_session_finished', [])) as boolean;
+      } catch (e) {
+        console.error('Polling error:', e);
+        break;
+      }
+    }
+
+    if (buffer) {
+      onSendMessage(buffer, 'assistant');
+    }
+    setIsProcessing(false);
+  };
+
+  const handleSend = (overrideContent?: string) => {
+    const content = (overrideContent ?? inputValue).trim();
     if (!content || !conversation) return;
 
-    onSendMessage(content);
+    onSendMessage(content, 'user');
     setInputValue('');
     textareaRef.current?.focus();
 
-    // Simulate AI response after a short delay
-    setTimeout(() => {
-      const response = getAIResponse(content);
-      onSendMessage(response.content);
-    }, 800);
+    setIsProcessing(true);
+    sendRequest('input_from_client', [content])
+      .then((result) => {
+        if (result === 'processing') {
+          pollForResponse();
+        } else {
+          setIsProcessing(false);
+          onSendMessage(String(result), 'assistant');
+        }
+      })
+      .catch((err) => {
+        setIsProcessing(false);
+        console.error('RPC error:', err);
+        onSendMessage(`Error: ${err.message}`, 'assistant');
+      });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -80,11 +85,7 @@ export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
 
   const handleQuickAction = (prompt: string) => {
     if (!conversation) return;
-    onSendMessage(prompt);
-    setTimeout(() => {
-      const response = getAIResponse(prompt);
-      onSendMessage(response.content);
-    }, 800);
+    handleSend(prompt);
   };
 
   if (!conversation) {
@@ -106,7 +107,26 @@ export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
       style={{ backgroundColor: '#0D0D0D' }}
     >
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto px-6 py-6">
+      <div className="relative flex-1 overflow-y-auto px-6 py-6">
+        {/* Connection Status */}
+        <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
+          <div
+            className={`w-2 h-2 rounded-full ${
+              readyState === 'open'
+                ? 'bg-green-500'
+                : readyState === 'connecting'
+                ? 'bg-yellow-500'
+                : 'bg-red-500'
+            }`}
+          />
+          <span className="text-xs" style={{ color: '#52525B' }}>
+            {readyState === 'open'
+              ? 'Connected'
+              : readyState === 'connecting'
+              ? 'Connecting...'
+              : 'Disconnected'}
+          </span>
+        </div>
         {isEmpty ? (
           /* Welcome State */
           <div className="flex flex-col items-center justify-center h-full">
@@ -185,6 +205,7 @@ export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
                           className="px-5 py-4 rounded-2xl rounded-tl-md"
                           style={{ backgroundColor: '#141414' }}
                         >
+                          {/* TODO: Extract markdown rendering into a reusable component */}
                           <div className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: '#A1A1AA' }}>
                             {msg.content.split('```').map((part, partIdx) => {
                               if (partIdx % 2 === 1) {
@@ -259,6 +280,39 @@ export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
                 </div>
               </div>
             ))}
+            {isProcessing && (
+              <div className="flex gap-4 flex-row">
+                <div className="flex-shrink-0">
+                  <img
+                    src="/ai-avatar.png"
+                    alt="AI"
+                    className="w-10 h-10 rounded-lg"
+                    style={{ boxShadow: '0 2px 8px rgba(108, 92, 231, 0.3)' }}
+                  />
+                </div>
+                <div className="flex-1 text-left">
+                  <div
+                    className="inline-block px-5 py-3 rounded-2xl rounded-tl-md"
+                    style={{ backgroundColor: '#141414' }}
+                  >
+                    <div className="flex gap-1">
+                      <span
+                        className="w-2 h-2 rounded-full bg-[#6C5CE7] animate-bounce"
+                        style={{ animationDelay: '0ms' }}
+                      />
+                      <span
+                        className="w-2 h-2 rounded-full bg-[#6C5CE7] animate-bounce"
+                        style={{ animationDelay: '150ms' }}
+                      />
+                      <span
+                        className="w-2 h-2 rounded-full bg-[#6C5CE7] animate-bounce"
+                        style={{ animationDelay: '300ms' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -295,6 +349,7 @@ export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
           >
             <Paperclip size={18} />
           </button>
+          {/* TODO: Add auto-resize and file attachment support to textarea */}
           <textarea
             ref={textareaRef}
             value={inputValue}
@@ -311,11 +366,11 @@ export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
             rows={1}
           />
           <button
-            onClick={handleSend}
-            disabled={!inputValue.trim()}
+            onClick={() => handleSend()}
+            disabled={!inputValue.trim() || isProcessing || readyState !== 'open'}
             className="flex-shrink-0 p-2.5 rounded-xl transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed hover:scale-105"
             style={{
-              background: inputValue.trim()
+              background: inputValue.trim() && !isProcessing && readyState === 'open'
                 ? 'linear-gradient(90deg, #5B4BD3, #8E7CF5)'
                 : '#2A2A2A',
             }}
