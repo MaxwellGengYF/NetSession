@@ -90,20 +90,6 @@ export function useConversations() {
     setActiveConversationId(newConv.id);
     notifyActive(newConv.id);
 
-    sendRequest('open_session', [])
-      .then((sessionId) => {
-        setConversations(prev => {
-          const updated = prev.map(c =>
-            c.id === newConv.id ? { ...c, sessionId: sessionId as string } : c
-          );
-          notifyChange(updated);
-          return updated;
-        });
-      })
-      .catch((err) => {
-        console.error('Failed to open session:', err);
-      });
-
     return newConv.id;
   }, [conversations.length, notifyChange, notifyActive, sendRequest]);
 
@@ -164,6 +150,14 @@ export function useConversations() {
     });
   }, [notifyChange]);
 
+  const setSessionId = useCallback((id: string, sessionId: string) => {
+    setConversations(prev => {
+      const updated = prev.map(c => c.id === id ? { ...c, sessionId } : c);
+      notifyChange(updated);
+      return updated;
+    });
+  }, [notifyChange]);
+
   const activeConversation = conversations.find(c => c.id === activeConversationId) ?? null;
 
   // TODO: Remove global window API or secure it before production release
@@ -207,6 +201,7 @@ export function useConversations() {
     createConversation,
     destroyConversation,
     switchConversation,
+    setSessionId,
     addMessage,
   };
 }

@@ -6,6 +6,7 @@ import { useRpcSocket } from '@/hooks/useRpcSocket';
 interface ChatAreaProps {
   conversation: Conversation | null;
   onSendMessage: (content: string, role: 'user' | 'assistant') => void;
+  onSetSessionId?: (conversationId: string, sessionId: string) => void;
 }
 
 const quickActions = [
@@ -15,7 +16,7 @@ const quickActions = [
 ];
 
 
-export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
+export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAreaProps) {
   const [inputValue, setInputValue] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -23,30 +24,36 @@ export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { readyState, sendRequest } = useRpcSocket('ws://127.0.0.1:8889');
   const sessionIdRef = useRef<string | null>(null);
+  const openedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversation?.messages.length, isProcessing]);
 
+  // Sync sessionIdRef when parent provides sessionId
+  useEffect(() => {
+    if (conversation?.sessionId) {
+      sessionIdRef.current = conversation.sessionId;
+    }
+  }, [conversation?.sessionId]);
+
+  // Open session lazily on first focus of a conversation
   useEffect(() => {
     if (!conversation || readyState !== 'open') return;
+    if (conversation.sessionId) return;
+    if (openedRef.current.has(conversation.id)) return;
 
+    openedRef.current.add(conversation.id);
     let cancelled = false;
     sendRequest('open_session', []).then((sid) => {
       if (!cancelled && typeof sid === 'string') {
         sessionIdRef.current = sid;
+        onSetSessionId?.(conversation.id, sid);
       }
     });
 
-    return () => {
-      cancelled = true;
-      const sid = sessionIdRef.current;
-      if (sid) {
-        sendRequest('close_session', [sid]).catch(() => {});
-        sessionIdRef.current = null;
-      }
-    };
-  }, [conversation?.id, readyState, sendRequest]);
+    // Intentionally no cleanup: session stays open on unfocus
+  }, [conversation?.id, readyState, sendRequest, onSetSessionId]);
 
   const pollForResponse = async () => {
     const sid = sessionIdRef.current;

@@ -12,6 +12,7 @@ export default function App() {
     createConversation,
     destroyConversation,
     switchConversation,
+    setSessionId,
     addMessage,
   } = useConversations();
 
@@ -45,6 +46,7 @@ export default function App() {
         <ChatArea
           conversation={activeConversation}
           onSendMessage={handleSendMessage}
+          onSetSessionId={setSessionId}
         />
       </main>
 

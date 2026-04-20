@@ -20,7 +20,7 @@ interface JsonRpcResponse {
 let globalWs: WebSocket | null = null;
 let globalReadyState: ReadyState = 'closed';
 const stateListeners = new Set<(state: ReadyState) => void>();
-const pendingMap = new Map<number, { resolve: (value: unknown) => void; reject: (reason: Error) => void }>();
+const pendingQueue: { resolve: (value: unknown) => void; reject: (reason: Error) => void }[] = [];
 let requestId = 1;
 let reconnectAttempts = 0;
 const maxReconnectAttempts = 3;
@@ -44,13 +44,18 @@ function connectSocket(url: string) {
   ws.onmessage = (event) => {
     try {
       const data: JsonRpcResponse = JSON.parse(event.data);
-      if (data.id !== undefined && pendingMap.has(data.id)) {
-        const { resolve, reject } = pendingMap.get(data.id)!;
-        pendingMap.delete(data.id);
+      const pending = data.id !== undefined
+        ? pendingQueue.find((p) => p)
+        : pendingQueue.shift();
+      if (pending) {
+        if (data.id !== undefined) {
+          const idx = pendingQueue.indexOf(pending);
+          if (idx !== -1) pendingQueue.splice(idx, 1);
+        }
         if (data.error) {
-          reject(new Error(`JSON-RPC Error ${data.error.code}: ${data.error.message}`));
+          pending.reject(new Error(`JSON-RPC Error ${data.error.code}: ${data.error.message}`));
         } else {
-          resolve(data.result);
+          pending.resolve(data.result);
         }
       }
     } catch (e) {
@@ -61,10 +66,10 @@ function connectSocket(url: string) {
   ws.onclose = () => {
     notifyState('closed');
     globalWs = null;
-    pendingMap.forEach(({ reject }) => {
-      reject(new Error('WebSocket closed'));
-    });
-    pendingMap.clear();
+    while (pendingQueue.length > 0) {
+      const pending = pendingQueue.shift()!;
+      pending.reject(new Error('WebSocket closed'));
+    }
 
     if (reconnectAttempts < maxReconnectAttempts) {
       reconnectAttempts += 1;
@@ -103,7 +108,7 @@ export function useRpcSocket(url: string) {
         return;
       }
       const id = requestId++;
-      pendingMap.set(id, { resolve, reject });
+      pendingQueue.push({ resolve, reject });
       const request: JsonRpcRequest = { jsonrpc: '2.0', method, params, id };
       ws.send(JSON.stringify(request));
     });
