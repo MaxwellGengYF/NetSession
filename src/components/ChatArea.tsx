@@ -59,15 +59,20 @@ export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAr
     const sid = sessionIdRef.current;
     if (!sid) return;
 
-    let buffer = '';
     let finished = false;
 
     while (!finished) {
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, 500));
       try {
         const chunks = (await sendRequest('get_output_from_client', [sid])) as string[];
         if (Array.isArray(chunks)) {
-          buffer += chunks.join('');
+          for (const chunk of chunks) {
+            if (chunk) {
+              onSendMessage(chunk, 'assistant');
+            }
+          }
+        } else if (chunks) {
+          onSendMessage(String(chunks), 'assistant');
         }
         finished = (await sendRequest('is_session_finished', [sid])) as boolean;
       } catch (e) {
@@ -76,9 +81,6 @@ export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAr
       }
     }
 
-    if (buffer) {
-      onSendMessage(buffer, 'assistant');
-    }
     setIsProcessing(false);
   };
 
@@ -94,7 +96,7 @@ export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAr
     textareaRef.current?.focus();
 
     setIsProcessing(true);
-    sendRequest('input_from_client', [content, sid])
+    sendRequest('input_from_client', [sid, content])
       .then((result) => {
         if (result === 'processing') {
           pollForResponse();
