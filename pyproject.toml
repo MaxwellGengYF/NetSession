@@ -1,0 +1,18 @@
+[tool.uv]
+link-mode = "symlink"
+[project]
+name = "py-network"
+version = "0.1.0"
+description = "JSON-RPC Backend with WebSocket-to-TCP Bridge and TCP networking utilities"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "websockets>=12.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["py_network"]

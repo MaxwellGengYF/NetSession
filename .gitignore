@@ -37,3 +37,5 @@ build/
 Thumbs.db
 
 agent.py
+
+__pycache__

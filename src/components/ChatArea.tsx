@@ -22,23 +22,47 @@ export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { readyState, sendRequest } = useRpcSocket('ws://127.0.0.1:8889');
+  const sessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversation?.messages.length, isProcessing]);
 
+  useEffect(() => {
+    if (!conversation || readyState !== 'open') return;
+
+    let cancelled = false;
+    sendRequest('open_session', []).then((sid) => {
+      if (!cancelled && typeof sid === 'string') {
+        sessionIdRef.current = sid;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      const sid = sessionIdRef.current;
+      if (sid) {
+        sendRequest('close_session', [sid]).catch(() => {});
+        sessionIdRef.current = null;
+      }
+    };
+  }, [conversation?.id, readyState, sendRequest]);
+
   const pollForResponse = async () => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+
     let buffer = '';
     let finished = false;
 
     while (!finished) {
       await new Promise((resolve) => setTimeout(resolve, 300));
       try {
-        const chunks = (await sendRequest('get_output_from_client', [])) as string[];
+        const chunks = (await sendRequest('get_output_from_client', [sid])) as string[];
         if (Array.isArray(chunks)) {
           buffer += chunks.join('');
         }
-        finished = (await sendRequest('is_session_finished', [])) as boolean;
+        finished = (await sendRequest('is_session_finished', [sid])) as boolean;
       } catch (e) {
         console.error('Polling error:', e);
         break;
@@ -55,12 +79,15 @@ export function ChatArea({ conversation, onSendMessage }: ChatAreaProps) {
     const content = (overrideContent ?? inputValue).trim();
     if (!content || !conversation) return;
 
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+
     onSendMessage(content, 'user');
     setInputValue('');
     textareaRef.current?.focus();
 
     setIsProcessing(true);
-    sendRequest('input_from_client', [content])
+    sendRequest('input_from_client', [content, sid])
       .then((result) => {
         if (result === 'processing') {
           pollForResponse();

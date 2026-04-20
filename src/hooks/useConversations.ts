@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Conversation, Message } from '@/types/conversation';
+import { useRpcSocket } from './useRpcSocket';
 
 let globalIdCounter = 0;
 const generateId = () => `conv_${Date.now()}_${globalIdCounter++}`;
@@ -62,6 +63,7 @@ export function useConversations() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(initialConversations[0]?.id ?? null);
   const changeListeners = useRef<((conversations: Conversation[]) => void)[]>([]);
   const activeListeners = useRef<((conversationId: string | null) => void)[]>([]);
+  const { sendRequest } = useRpcSocket('ws://127.0.0.1:8889');
 
   const notifyChange = useCallback((newConversations: Conversation[]) => {
     changeListeners.current.forEach(cb => cb(newConversations));
@@ -87,11 +89,29 @@ export function useConversations() {
     });
     setActiveConversationId(newConv.id);
     notifyActive(newConv.id);
+
+    sendRequest('open_session', [])
+      .then((sessionId) => {
+        setConversations(prev => {
+          const updated = prev.map(c =>
+            c.id === newConv.id ? { ...c, sessionId: sessionId as string } : c
+          );
+          notifyChange(updated);
+          return updated;
+        });
+      })
+      .catch((err) => {
+        console.error('Failed to open session:', err);
+      });
+
     return newConv.id;
-  }, [conversations.length, notifyChange, notifyActive]);
+  }, [conversations.length, notifyChange, notifyActive, sendRequest]);
 
   // TODO: Add confirmation dialog and support soft-delete / archiving before removal
   const destroyConversation = useCallback((id: string) => {
+    const conv = conversations.find(c => c.id === id);
+    const sessionId = conv?.sessionId;
+
     setConversations(prev => {
       const updated = prev.filter(c => c.id !== id);
       notifyChange(updated);
@@ -102,8 +122,15 @@ export function useConversations() {
       }
       return updated;
     });
+
+    if (sessionId) {
+      sendRequest('close_session', [sessionId]).catch((err) => {
+        console.error('Failed to close session:', err);
+      });
+    }
+
     return true;
-  }, [activeConversationId, notifyChange, notifyActive]);
+  }, [activeConversationId, conversations, notifyChange, notifyActive, sendRequest]);
 
   const switchConversation = useCallback((id: string) => {
     const exists = conversations.some(c => c.id === id);

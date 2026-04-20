@@ -14,6 +14,7 @@ import json
 import queue
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,9 +30,15 @@ from py_network.tcp_client import TCPClient
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ClientState:
+class Session:
+    session_id: str
     output_queue: queue.Queue = field(default_factory=queue.Queue)
     thread: threading.Thread | None = None
+
+
+@dataclass
+class ClientState:
+    sessions: dict[str, Session] = field(default_factory=dict)
 
 
 clients: dict[int, ClientState] = {}
@@ -40,11 +47,13 @@ clients: dict[int, ClientState] = {}
 def on_client_connect(client_id: int, client_addr: tuple[str, int]) -> None:
     print(f"[Backend] TCP client {client_id} connected from {client_addr}")
     clients[client_id] = ClientState()
+    print('CONNECT')
 
 
 def on_client_disconnect(client_id: int) -> None:
     print(f"[Backend] TCP client {client_id} disconnected")
     clients.pop(client_id, None)
+    print('DISCONNECT')
 
 
 def handle_rpc(client_id: int, request: dict) -> dict:
@@ -54,13 +63,20 @@ def handle_rpc(client_id: int, request: dict) -> dict:
     req_id = request.get("id")
 
     if method == "input_from_client":
+        print('input_from_client')
         if not params:
             return {"jsonrpc": "2.0", "error": {"code": -32602, "message": "Invalid params"}, "id": req_id}
         text = str(params[0])
+        session_id = str(params[1]) if len(params) > 1 else None
         state = clients.get(client_id)
         if state is None:
             return {"jsonrpc": "2.0", "result": "error: client not connected", "id": req_id}
-        if state.thread is not None and state.thread.is_alive():
+        sid = session_id or "default"
+        session = state.sessions.get(sid)
+        if session is None:
+            session = Session(session_id=sid)
+            state.sessions[sid] = session
+        if session.thread is not None and session.thread.is_alive():
             return {"jsonrpc": "2.0", "result": "error: prompt already in progress", "id": req_id}
 
         def process() -> None:
@@ -71,33 +87,67 @@ def handle_rpc(client_id: int, request: dict) -> dict:
             words = response.split(" ")
             for i in range(0, len(words), 2):
                 chunk = " ".join(words[i : i + 2]) + " "
-                state.output_queue.put(chunk)
+                session.output_queue.put(chunk)
                 time.sleep(0.15)
 
-        state.thread = threading.Thread(target=process, daemon=True)
-        state.thread.start()
+        session.thread = threading.Thread(target=process, daemon=True)
+        session.thread.start()
         return {"jsonrpc": "2.0", "result": "processing", "id": req_id}
 
     elif method == "get_output_from_client":
+        print('get_output_from_client')
+
         state = clients.get(client_id)
         if state is None:
             return {"jsonrpc": "2.0", "result": ["error: client not connected"], "id": req_id}
+        session_id = str(params[0]) if params else None
+        sid = session_id or "default"
+        session = state.sessions.get(sid)
+        if session is None:
+            return {"jsonrpc": "2.0", "result": [], "id": req_id}
         chunks = []
         while True:
             try:
-                chunks.append(state.output_queue.get_nowait())
+                chunks.append(session.output_queue.get_nowait())
             except queue.Empty:
                 break
         return {"jsonrpc": "2.0", "result": chunks, "id": req_id}
 
     elif method == "is_session_finished":
+        print('is_session_finished')
+
         state = clients.get(client_id)
         if state is None:
             return {"jsonrpc": "2.0", "result": True, "id": req_id}
-        finished = state.thread is None or not state.thread.is_alive()
+        session_id = str(params[0]) if params else None
+        sid = session_id or "default"
+        session = state.sessions.get(sid)
+        if session is None:
+            return {"jsonrpc": "2.0", "result": True, "id": req_id}
+        finished = session.thread is None or not session.thread.is_alive()
         if finished:
-            state.thread = None
+            session.thread = None
         return {"jsonrpc": "2.0", "result": finished, "id": req_id}
+
+    elif method == "open_session":
+        state = clients.get(client_id)
+        if state is None:
+            return {"jsonrpc": "2.0", "result": "error: client not connected", "id": req_id}
+        new_session_id = str(uuid.uuid4())
+        state.sessions[new_session_id] = Session(session_id=new_session_id)
+        return {"jsonrpc": "2.0", "result": new_session_id, "id": req_id}
+
+    elif method == "close_session":
+        if not params:
+            return {"jsonrpc": "2.0", "error": {"code": -32602, "message": "Invalid params"}, "id": req_id}
+        target_session_id = str(params[0])
+        found = False
+        for state in clients.values():
+            if target_session_id in state.sessions:
+                state.sessions.pop(target_session_id)
+                found = True
+                break
+        return {"jsonrpc": "2.0", "result": "closed" if found else "missing", "id": req_id}
 
     else:
         return {

@@ -12,6 +12,7 @@ export interface Conversation {
   messages: Message[];
   createdAt: Date;
   updatedAt: Date;
+  sessionId?: string;
 }
 
 // JavaScript API interfaces exposed to window

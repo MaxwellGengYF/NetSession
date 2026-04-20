@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 export type ReadyState = 'connecting' | 'open' | 'closed' | 'error';
 
@@ -16,96 +16,101 @@ interface JsonRpcResponse {
   id?: number;
 }
 
-export function useRpcSocket(url: string) {
-  const [readyState, setReadyState] = useState<ReadyState>('connecting');
-  const wsRef = useRef<WebSocket | null>(null);
-  const idRef = useRef(1);
-  const pendingRef = useRef<
-    Map<number, { resolve: (value: unknown) => void; reject: (reason: Error) => void }>
-  >(new Map());
-  const reconnectAttempts = useRef(0);
-  const maxReconnectAttempts = 3;
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+// --- Singleton WebSocket state (shared across all consumers) ---
+let globalWs: WebSocket | null = null;
+let globalReadyState: ReadyState = 'closed';
+const stateListeners = new Set<(state: ReadyState) => void>();
+const pendingMap = new Map<number, { resolve: (value: unknown) => void; reject: (reason: Error) => void }>();
+let requestId = 1;
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 3;
+let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  const connect = useCallback(() => {
-    setReadyState('connecting');
-    const ws = new WebSocket(url);
+function notifyState(state: ReadyState) {
+  globalReadyState = state;
+  stateListeners.forEach((cb) => cb(state));
+}
 
-    ws.onopen = () => {
-      setReadyState('open');
-      reconnectAttempts.current = 0;
-    };
+function connectSocket(url: string) {
+  if (globalWs) return;
+  notifyState('connecting');
+  const ws = new WebSocket(url);
 
-    ws.onmessage = (event) => {
-      try {
-        const data: JsonRpcResponse = JSON.parse(event.data);
-        if (data.id !== undefined && pendingRef.current.has(data.id)) {
-          const { resolve, reject } = pendingRef.current.get(data.id)!;
-          pendingRef.current.delete(data.id);
-          if (data.error) {
-            reject(new Error(`JSON-RPC Error ${data.error.code}: ${data.error.message}`));
-          } else {
-            resolve(data.result);
-          }
+  ws.onopen = () => {
+    notifyState('open');
+    reconnectAttempts = 0;
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const data: JsonRpcResponse = JSON.parse(event.data);
+      if (data.id !== undefined && pendingMap.has(data.id)) {
+        const { resolve, reject } = pendingMap.get(data.id)!;
+        pendingMap.delete(data.id);
+        if (data.error) {
+          reject(new Error(`JSON-RPC Error ${data.error.code}: ${data.error.message}`));
+        } else {
+          resolve(data.result);
         }
-      } catch (e) {
-        console.error('[useRpcSocket] Failed to parse message:', event.data, e);
       }
-    };
+    } catch (e) {
+      console.error('[useRpcSocket] Failed to parse message:', event.data, e);
+    }
+  };
 
-    ws.onclose = () => {
-      setReadyState('closed');
-      wsRef.current = null;
-      // Reject all pending requests
-      pendingRef.current.forEach(({ reject }) => {
-        reject(new Error('WebSocket closed'));
-      });
-      pendingRef.current.clear();
+  ws.onclose = () => {
+    notifyState('closed');
+    globalWs = null;
+    pendingMap.forEach(({ reject }) => {
+      reject(new Error('WebSocket closed'));
+    });
+    pendingMap.clear();
 
-      if (reconnectAttempts.current < maxReconnectAttempts) {
-        reconnectAttempts.current += 1;
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 10000);
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connect();
-        }, delay);
-      }
-    };
+    if (reconnectAttempts < maxReconnectAttempts) {
+      reconnectAttempts += 1;
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000);
+      reconnectTimeout = setTimeout(() => {
+        connectSocket(url);
+      }, delay);
+    }
+  };
 
-    ws.onerror = () => {
-      setReadyState('error');
-    };
+  ws.onerror = () => {
+    notifyState('error');
+  };
 
-    wsRef.current = ws;
-  }, [url]);
+  globalWs = ws;
+}
+
+export function useRpcSocket(url: string) {
+  const [readyState, setReadyState] = useState<ReadyState>(globalReadyState);
 
   useEffect(() => {
-    connect();
+    stateListeners.add(setReadyState);
+    if (!globalWs || globalWs.readyState === WebSocket.CLOSED) {
+      connectSocket(url);
+    }
     return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      stateListeners.delete(setReadyState);
     };
-  }, [connect]);
+  }, [url]);
 
   const sendRequest = useCallback((method: string, params: unknown[]): Promise<unknown> => {
     return new Promise((resolve, reject) => {
-      const ws = wsRef.current;
+      const ws = globalWs;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         reject(new Error('WebSocket not connected'));
         return;
       }
-      const id = idRef.current++;
-      pendingRef.current.set(id, { resolve, reject });
+      const id = requestId++;
+      pendingMap.set(id, { resolve, reject });
       const request: JsonRpcRequest = { jsonrpc: '2.0', method, params, id };
       ws.send(JSON.stringify(request));
     });
   }, []);
 
   const sendNotification = useCallback((method: string, params: unknown[]): void => {
-    const ws = wsRef.current;
+    const ws = globalWs;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       console.warn('[useRpcSocket] Cannot send notification, socket not open');
       return;
