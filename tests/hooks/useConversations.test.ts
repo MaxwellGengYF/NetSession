@@ -2,6 +2,16 @@ import { describe, it, expect, vi } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useConversations } from "@/hooks/useConversations";
 
+vi.mock("@/hooks/useKimix", () => ({
+  useKimix: () => ({
+    connectionState: "open" as const,
+    openSession: vi.fn(() => Promise.resolve("sess-1")),
+    closeSession: vi.fn(() => Promise.resolve()),
+    sendMessage: vi.fn(),
+    abort: vi.fn(),
+  }),
+}));
+
 describe("useConversations", () => {
   it("initializes with default conversations", () => {
     const { result } = renderHook(() => useConversations());

@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Conversation, Message } from '@/types/conversation';
-import { useRpcSocket } from './useRpcSocket';
+import { useKimix } from './useKimix';
 
 let globalIdCounter = 0;
 const generateId = () => `conv_${Date.now()}_${globalIdCounter++}`;
@@ -63,7 +63,7 @@ export function useConversations() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(initialConversations[0]?.id ?? null);
   const changeListeners = useRef<((conversations: Conversation[]) => void)[]>([]);
   const activeListeners = useRef<((conversationId: string | null) => void)[]>([]);
-  const { sendRequest } = useRpcSocket('ws://127.0.0.1:8889');
+  const { closeSession } = useKimix();
 
   const notifyChange = useCallback((newConversations: Conversation[]) => {
     changeListeners.current.forEach(cb => cb(newConversations));
@@ -91,7 +91,7 @@ export function useConversations() {
     notifyActive(newConv.id);
 
     return newConv.id;
-  }, [conversations.length, notifyChange, notifyActive, sendRequest]);
+  }, [conversations.length, notifyChange, notifyActive]);
 
   // TODO: Add confirmation dialog and support soft-delete / archiving before removal
   const destroyConversation = useCallback((id: string) => {
@@ -110,13 +110,13 @@ export function useConversations() {
     });
 
     if (sessionId) {
-      sendRequest('close_session', [sessionId]).catch((err) => {
-        console.error('Failed to close session:', err);
+      closeSession(sessionId).catch((err) => {
+        console.error('Failed to delete session:', err);
       });
     }
 
     return true;
-  }, [activeConversationId, conversations, notifyChange, notifyActive, sendRequest]);
+  }, [activeConversationId, conversations, notifyChange, notifyActive, closeSession]);
 
   const switchConversation = useCallback((id: string) => {
     const exists = conversations.some(c => c.id === id);
@@ -144,6 +144,30 @@ export function useConversations() {
             ? content.slice(0, 40) + (content.length > 40 ? '...' : '')
             : c.title,
         };
+      });
+      notifyChange(updated);
+      return updated;
+    });
+  }, [notifyChange]);
+
+  const appendToLastMessage = useCallback((conversationId: string, delta: string) => {
+    if (!delta) return;
+    setConversations(prev => {
+      const updated = prev.map(c => {
+        if (c.id !== conversationId) return c;
+        const msgs = [...c.messages];
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === 'assistant') {
+          msgs[msgs.length - 1] = { ...last, content: last.content + delta };
+        } else {
+          msgs.push({
+            id: `msg_${Date.now()}`,
+            role: 'assistant',
+            content: delta,
+            timestamp: new Date(),
+          });
+        }
+        return { ...c, messages: msgs, updatedAt: new Date() };
       });
       notifyChange(updated);
       return updated;
@@ -203,5 +227,6 @@ export function useConversations() {
     switchConversation,
     setSessionId,
     addMessage,
+    appendToLastMessage,
   };
 }

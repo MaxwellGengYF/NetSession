@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, Code, Palette, Layout, Sparkles } from 'lucide-react';
 import type { Conversation } from '@/types/conversation';
-import { useRpcSocket } from '@/hooks/useRpcSocket';
+import { useKimix } from '@/hooks/useKimix';
+import { useKimixSSE } from '@/hooks/useKimixSSE';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
   onSendMessage: (content: string, role: 'user' | 'assistant') => void;
   onSetSessionId?: (conversationId: string, sessionId: string) => void;
+  onAppendToLastMessage?: (conversationId: string, delta: string) => void;
 }
 
 const quickActions = [
@@ -16,14 +18,15 @@ const quickActions = [
 ];
 
 
-export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAreaProps) {
+export function ChatArea({ conversation, onSendMessage, onSetSessionId, onAppendToLastMessage }: ChatAreaProps) {
   const [inputValue, setInputValue] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { readyState, sendRequest } = useRpcSocket('ws://127.0.0.1:8889');
-  const sessionIdRef = useRef<string | null>(null);
+  const { connectionState } = useKimixSSE();
+  const { openSession, sendMessage } = useKimix();
+  const sessionIdRef = useRef<string | null>(conversation?.sessionId ?? null);
   const openedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -39,52 +42,23 @@ export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAr
 
   // Open session lazily on first focus of a conversation
   useEffect(() => {
-    if (!conversation || readyState !== 'open') return;
+    if (!conversation || connectionState !== 'open') return;
     if (conversation.sessionId) return;
     if (openedRef.current.has(conversation.id)) return;
 
     openedRef.current.add(conversation.id);
     let cancelled = false;
-    sendRequest('open_session', []).then((sid) => {
+    openSession(conversation.title || undefined).then((sid) => {
       if (!cancelled && typeof sid === 'string') {
         sessionIdRef.current = sid;
         onSetSessionId?.(conversation.id, sid);
       }
     });
 
-    // Intentionally no cleanup: session stays open on unfocus
-  }, [conversation?.id, readyState, sendRequest, onSetSessionId]);
+    return () => { cancelled = true; };
+  }, [conversation?.id, conversation?.title, connectionState, openSession, onSetSessionId]);
 
-  const pollForResponse = async () => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-
-    let finished = false;
-
-    while (!finished) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      try {
-        const chunks = (await sendRequest('get_output_from_client', [sid])) as string[];
-        if (Array.isArray(chunks)) {
-          for (const chunk of chunks) {
-            if (chunk) {
-              onSendMessage(chunk, 'assistant');
-            }
-          }
-        } else if (chunks) {
-          onSendMessage(String(chunks), 'assistant');
-        }
-        finished = (await sendRequest('is_session_finished', [sid])) as boolean;
-      } catch (e) {
-        console.error('Polling error:', e);
-        break;
-      }
-    }
-
-    setIsProcessing(false);
-  };
-
-  const handleSend = (overrideContent?: string) => {
+  const handleSend = async (overrideContent?: string) => {
     const content = (overrideContent ?? inputValue).trim();
     if (!content || !conversation) return;
 
@@ -94,22 +68,22 @@ export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAr
     onSendMessage(content, 'user');
     setInputValue('');
     textareaRef.current?.focus();
-
     setIsProcessing(true);
-    sendRequest('input_from_client', [sid, content])
-      .then((result) => {
-        if (result === 'processing') {
-          pollForResponse();
-        } else {
-          setIsProcessing(false);
-          onSendMessage(String(result), 'assistant');
+
+    try {
+      await sendMessage(sid, content, (delta) => {
+        if (delta.text) {
+          onAppendToLastMessage?.(conversation.id, delta.text);
         }
-      })
-      .catch((err) => {
-        setIsProcessing(false);
-        console.error('RPC error:', err);
-        onSendMessage(`Error: ${err.message}`, 'assistant');
+        if (delta.done) {
+          setIsProcessing(false);
+        }
       });
+    } catch (err) {
+      setIsProcessing(false);
+      console.error('Send error:', err);
+      onSendMessage(`Error: ${(err as Error).message}`, 'assistant');
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -136,6 +110,7 @@ export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAr
   }
 
   const isEmpty = conversation.messages.length === 0;
+  const readyState = connectionState;
 
   return (
     <div
@@ -156,9 +131,9 @@ export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAr
             }`}
           />
           <span className="text-xs" style={{ color: '#52525B' }}>
-            {readyState === 'open'
+            {connectionState === 'open'
               ? 'Connected'
-              : readyState === 'connecting'
+              : connectionState === 'connecting'
               ? 'Connecting...'
               : 'Disconnected'}
           </span>
@@ -402,11 +377,12 @@ export function ChatArea({ conversation, onSendMessage, onSetSessionId }: ChatAr
             rows={1}
           />
           <button
+            data-testid="send-button"
             onClick={() => handleSend()}
-            disabled={!inputValue.trim() || isProcessing || readyState !== 'open'}
+            disabled={!inputValue.trim() || isProcessing || connectionState !== 'open'}
             className="flex-shrink-0 p-2.5 rounded-xl transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed hover:scale-105"
             style={{
-              background: inputValue.trim() && !isProcessing && readyState === 'open'
+              background: inputValue.trim() && !isProcessing && connectionState === 'open'
                 ? 'linear-gradient(90deg, #5B4BD3, #8E7CF5)'
                 : '#2A2A2A',
             }}

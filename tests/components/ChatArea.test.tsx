@@ -4,11 +4,25 @@ import userEvent from "@testing-library/user-event";
 import { ChatArea } from "@/components/ChatArea";
 import type { Conversation } from "@/types/conversation";
 
-vi.mock("@/hooks/useRpcSocket", () => ({
-  useRpcSocket: () => ({
-    readyState: "open" as const,
-    sendRequest: vi.fn(() => Promise.resolve("done")),
-    sendNotification: vi.fn(),
+vi.mock("@/hooks/useKimixSSE", () => ({
+  useKimixSSE: () => ({
+    connectionState: "open" as const,
+    subscribe: vi.fn(() => () => {}),
+    subscribeGlobal: vi.fn(() => () => {}),
+    reconnect: vi.fn(),
+  }),
+}));
+
+vi.mock("@/hooks/useKimix", () => ({
+  useKimix: () => ({
+    connectionState: "open" as const,
+    openSession: vi.fn(() => Promise.resolve("sess-1")),
+    sendMessage: vi.fn((_sid, _text, onDelta) => {
+      onDelta({ text: "Response", done: true });
+      return Promise.resolve();
+    }),
+    abort: vi.fn(),
+    closeSession: vi.fn(),
   }),
 }));
 
@@ -65,13 +79,9 @@ describe("ChatArea", () => {
     render(<ChatArea conversation={populatedConversation} onSendMessage={onSend} />);
     const textarea = screen.getByPlaceholderText(/type your message/i);
     await userEvent.type(textarea, "My message");
-    const sendButton = screen.getAllByRole("button").find((b) =>
-      b.querySelector("svg")?.getAttribute("data-lucide-icon") === "Send"
-    );
-    if (sendButton) {
-      await userEvent.click(sendButton);
-      expect(onSend).toHaveBeenCalledWith("My message", "user");
-    }
+    const sendButton = screen.getByTestId("send-button");
+    await userEvent.click(sendButton);
+    expect(onSend).toHaveBeenCalledWith("My message", "user");
   });
 
   it("calls onSendMessage on Enter key", async () => {
@@ -85,13 +95,9 @@ describe("ChatArea", () => {
   it("does not send empty message", async () => {
     const onSend = vi.fn();
     render(<ChatArea conversation={populatedConversation} onSendMessage={onSend} />);
-    const sendButton = screen.getAllByRole("button").find((b) =>
-      b.querySelector("svg")?.getAttribute("data-lucide-icon") === "Send"
-    );
-    if (sendButton) {
-      await userEvent.click(sendButton);
-      expect(onSend).not.toHaveBeenCalled();
-    }
+    const sendButton = screen.getByTestId("send-button");
+    await userEvent.click(sendButton);
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("triggers quick action on welcome cards", async () => {
@@ -131,5 +137,10 @@ describe("ChatArea", () => {
     expect(pill).toBeInTheDocument();
     await userEvent.click(pill);
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("Tip 1", "user"));
+  });
+
+  it("shows connected status when SSE is open", () => {
+    render(<ChatArea conversation={populatedConversation} onSendMessage={vi.fn()} />);
+    expect(screen.getByText("Connected")).toBeInTheDocument();
   });
 });

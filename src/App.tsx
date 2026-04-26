@@ -14,6 +14,7 @@ export default function App() {
     switchConversation,
     setSessionId,
     addMessage,
+    appendToLastMessage,
   } = useConversations();
 
   const [isHelpOpen, setIsHelpOpen] = useState(false);
@@ -47,6 +48,7 @@ export default function App() {
           conversation={activeConversation}
           onSendMessage={handleSendMessage}
           onSetSessionId={setSessionId}
+          onAppendToLastMessage={appendToLastMessage}
         />
       </main>
 

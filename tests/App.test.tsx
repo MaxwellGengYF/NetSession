@@ -1,7 +1,17 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "@/App";
+
+vi.mock("@/hooks/useKimix", () => ({
+  useKimix: () => ({
+    connectionState: "open" as const,
+    openSession: vi.fn(() => Promise.resolve("sess-1")),
+    closeSession: vi.fn(() => Promise.resolve()),
+    sendMessage: vi.fn(),
+    abort: vi.fn(),
+  }),
+}));
 
 describe("App integration", () => {
   it("renders sidebar and chat area", () => {
